@@ -13,7 +13,7 @@ from dolfinx.fem import (Constant, FunctionSpace, Function, assemble_scalar,
                          dirichletbc, form, locate_dofs_topological, set_bc)
 from dolfinx.fem.petsc import assemble_vector
 from dolfinx.mesh import CellType, create_rectangle, exterior_facet_indices
-from ufl import TrialFunction, TestFunction, action, ds, dx, grad, inner
+from ufl import TrialFunction, TestFunction, action, dx, grad, inner
 
 from mpi4py import MPI
 from petsc4py import PETSc
