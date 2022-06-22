@@ -1,115 +1,118 @@
-import numpy as np
-import matplotlib.pyplot as plt
+# # Matrix-free Poisson solver
+#
+# Copyright (C) 2022 Adeeb Arif Kor
+#
+# This demo shows how to solve the Poisson problem using a matrix-free method.
+# In particular, we build a matrix free operator and use the PETSc CG solver to
+# solve the corresponding linear system of equation.
 
-import ufl
-from dolfinx import fem, io, mesh, plot, cpp, common
-from ufl import ds, dx, grad, inner
+import numpy as np
+
+from dolfinx.cpp.fem import pack_constants, pack_coefficients
+from dolfinx.fem import (Constant, FunctionSpace, Function, assemble_scalar,
+                         dirichletbc, form, locate_dofs_topological, set_bc)
+from dolfinx.fem.petsc import assemble_vector
+from dolfinx.mesh import CellType, create_rectangle, exterior_facet_indices
+from ufl import TrialFunction, TestFunction, action, ds, dx, grad, inner
 
 from mpi4py import MPI
 from petsc4py import PETSc
 
-msh = mesh.create_rectangle(comm=MPI.COMM_WORLD,
-                             points=((0.0, 0.0), (2.0, 1.0)), n=(64, 32),
-                             cell_type=mesh.CellType.triangle)
-V = fem.FunctionSpace(msh, ("Lagrange", 1))
 
-facets = mesh.locate_entities_boundary(msh, dim=1,
-                                       marker=lambda x: np.logical_or(np.isclose(x[0], 0.0),
-                                                                      np.isclose(x[0], 2.0)))
+class MatFree:
+    """
+    Matrix-free operator to use in the PETSc solver.
+    """
 
-dofs = fem.locate_dofs_topological(V=V, entity_dim=1, entities=facets)
-
-bc = fem.dirichletbc(value=PETSc.ScalarType(0), dofs=dofs, V=V)
-
-u = ufl.TrialFunction(V)
-v = ufl.TestFunction(V)
-x = ufl.SpatialCoordinate(msh)
-f = 10 * ufl.exp(-((x[0] - 0.5) ** 2 + (x[1] - 0.5) ** 2) / 0.02)
-g = ufl.sin(5 * x[0])
-a = inner(grad(u), grad(v)) * dx
-L = inner(f, v) * dx + inner(g, v) * ds
-
-# b = fem.petsc.assemble_vector(fem.form(L))
-# fem.apply_lifting(b, [fem.form(a)], bcs=[[bc]])
-# b.ghostUpdate(addv=PETSc.InsertMode.ADD, mode=PETSc.ScatterMode.REVERSE)
-# fem.set_bc(b, [bc])
-
-# A = fem.petsc.assemble_matrix(fem.form(a), bcs=[bc])
-# A.assemble()
-
-# opts = PETSc.Options()
-# opts["ksp_type"] = "cg"
-# opts["pc_type"] = "none"
-
-# solver = PETSc.KSP().create(MPI.COMM_WORLD)
-# solver.setFromOptions()
-# solver.setConvergenceHistory()
-# solver.setOperators(A)
-
-# solution = fem.Function(V)
-# solver.solve(b, solution.vector)
-# solution.x.scatter_forward()
-# residuals = solver.getConvergenceHistory()
-
-# with io.XDMFFile(MPI.COMM_WORLD, "solution.xdmf", "w", encoding=io.XDMFFile.Encoding.HDF5) as file:
-#     file.write_mesh(msh)
-#     file.write_function(solution)
-
-# plt.semilogy(residuals)
-# plt.savefig("residuals.png")
-
-class MatFreeA:
-    def __init__(self, a, bc):
-        self.a = a
+    def __init__(self, M, ui, bc):
+        self.M = M
+        self.ui = ui
+        self.consts = pack_constants(form(self.M))
         self.bc = bc
-        self.ui = fem.Function(V)
-        self.ui.interpolate(lambda x: x[0])
-        self.M = fem.form(ufl.action(self.a, self.ui))
-        self.consts = cpp.fem.pack_constants(self.M)
-        self.coeffs = cpp.fem.pack_coefficients(self.M)
 
     def mult(self, mat, x, y):
+        y.set(0.0)
+
         # ui <- x
         x.copy(result=self.ui.vector)
-        self.ui.vector.ghostUpdate(addv=PETSc.InsertMode.INSERT,
-                                   mode=PETSc.ScatterMode.FORWARD)
-        # y <- M x
-        fem.petsc.assemble_vector(y, self.M)#, self.consts, self.coeffs)
-        y.ghostUpdate(addv=PETSc.InsertMode.ADD,
-                      mode=PETSc.ScatterMode.REVERSE)
+
+        # y <- A x
+        coeffs = pack_coefficients(form(self.M))
+        assemble_vector(y, form(self.M), self.consts, coeffs)
 
         # Set BC dofs to zero
-        fem.set_bc(y, [self.bc], 0.0)
+        set_bc(y, [self.bc], None, 0.0)
+
+        y.ghostUpdate(addv=PETSc.InsertMode.ADD, mode=PETSc.ScatterMode.REVERSE)
+        y.ghostUpdate(addv=PETSc.InsertMode.INSERT, mode=PETSc.ScatterMode.FORWARD)
 
 
-b = fem.petsc.assemble_vector(fem.form(L))
-fem.
+# Create mesh and function space
+mesh = create_rectangle(comm=MPI.COMM_WORLD,
+                        points=((0.0, 0.0), (1.0, 1.0)), n=(10, 10),
+                        cell_type=CellType.triangle)
+V = FunctionSpace(mesh, ("Lagrange", 2))
 
+# Create the trial and test functions
+u = TrialFunction(V)
+v = TestFunction(V)
 
-# M = PETSc.Mat().create()
-# Mctx = MatFreeA(a, bc)
-# M.setSizes(b.getSizes())
-# M.setType(M.Type.PYTHON)
-# M.setPythonContext(Mctx)
-# M.setUp()
+# Define the source function
+f = Constant(mesh, PETSc.ScalarType(-6.0))
 
-# opts = PETSc.Options()
-# opts["ksp_type"] = "cg"
-# opts["pc_type"] = "none"
+# Define the variational form
+a = inner(grad(u), grad(v)) * dx
+L = inner(f, v) * dx
 
-# solver = PETSc.KSP().create(MPI.COMM_WORLD)
-# solver.setFromOptions()
-# solver.setConvergenceHistory()
-# solver.setOperators(M)
+# Define the action of the bilinear form "a" on a function ui
+ui = Function(V)
+M = action(a, ui)
 
-# solution = fem.Function(V)
-# solver.solve(b, solution.vector)
-# solution.x.scatter_forward()
-# residuals = solver.getConvergenceHistory()
+# Specify boundary condition
+u_D = Function(V)
+u_D.interpolate(lambda x: 1 + x[0] * x[0] + 2 * x[1] * x[1])
 
-# with io.XDMFFile(MPI.COMM_WORLD, "solution_matfree.xdmf", "w", encoding=io.XDMFFile.Encoding.HDF5) as file:
-#     file.write_mesh(msh)
-#     file.write_function(solution)
+mesh.topology.create_connectivity(1, 2)
+facets = exterior_facet_indices(mesh.topology)
+bdofs = locate_dofs_topological(V, 1, facets)
+bc = dirichletbc(u_D, bdofs)
 
-# plt.semilogy(residuals)
-# plt.savefig("residual_matfree.png")
+# Assemble RHS vector
+b = assemble_vector(form(L))
+set_bc(ui.vector, [bc], None, -1.0)
+assemble_vector(b, form(M))
+b.ghostUpdate(addv=PETSc.InsertMode.ADD, mode=PETSc.ScatterMode.REVERSE)
+set_bc(b, [bc], None, 0.0)
+b.ghostUpdate(addv=PETSc.InsertMode.INSERT, mode=PETSc.ScatterMode.FORWARD)
+
+# Set up a PETSc Mat object using the matrix free operator
+A = PETSc.Mat().create()
+Actx = MatFree(M, ui, bc)
+A.setSizes(b.getSizes())
+A.setType(A.Type.PYTHON)
+A.setPythonContext(Actx)
+A.setUp()
+
+# Set the linear solver options
+opts = PETSc.Options()
+opts["ksp_type"] = "cg"
+opts["pc_type"] = "none"
+
+# Define the PETSc linear solver
+solver = PETSc.KSP().create(MPI.COMM_WORLD)
+solver.setFromOptions()
+solver.setConvergenceHistory()
+solver.setOperators(A)
+
+# Solve
+uh = Function(V)
+solver.solve(b, uh.vector)
+set_bc(uh.vector, [bc], None, 1.0)
+
+# Compute error between exact and finite element solution
+E = uh - u_D
+error = MPI.COMM_WORLD.allreduce(
+    assemble_scalar(form(inner(E, E) * dx)), op=MPI.SUM)
+
+print("Number of CG iterations", solver.getIterationNumber())
+print("Finite element error (L2 norm (squared))", np.abs(error))
