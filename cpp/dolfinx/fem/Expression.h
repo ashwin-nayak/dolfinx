@@ -154,9 +154,8 @@ public:
 
     if (_argument_function_space)
     {
-      num_argument_dofs
-          = _argument_function_space->dofmap()->element_dof_layout().num_dofs();
       auto element = _argument_function_space->element();
+      num_argument_dofs = element->space_dimension();
 
       assert(element);
       if (element->needs_dof_transformations())
