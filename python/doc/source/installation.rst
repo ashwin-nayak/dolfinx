@@ -65,7 +65,7 @@ C++ core
 
 .. rubric:: Required
 
-- C++ compiler (supporting the C++17 standard)
+- C++ compiler (supporting the C++20 standard)
 - `Boost <http://www.boost.org>`_, with the following compiled Boost
   components
 
@@ -75,6 +75,7 @@ C++ core
 - `xtensor <https://xtensor.readthedocs.io/>`_
 - `pkg-config <https://www.freedesktop.org/wiki/Software/pkg-config/>`_
 - `Basix <http://github.com/FEniCS/basix>`_
+- `pugixml <https://pugixml.org/>`_
 - UFCx [``ufcx.h``, provided by FFCx]
 - MPI
 - HDF5 (with MPI support enabled)

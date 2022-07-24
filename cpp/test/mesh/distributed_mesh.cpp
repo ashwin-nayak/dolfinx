@@ -60,34 +60,29 @@ void test_distributed_mesh(mesh::CellPartitionFunction partitioner)
   fem::CoordinateElement cmap(e);
 
   // read mesh data
-  xt::xtensor<double, 2> x({0, 2});
-  xt::xtensor<std::int64_t, 2> cells(
-      {0, static_cast<std::size_t>(
-              mesh::num_cell_vertices(mesh::CellType::triangle))});
+  std::vector<double> x;
+  std::array<std::size_t, 2> xshape = {0, 2};
+  std::vector<std::int64_t> cells;
+  std::array<std::size_t, 2> cshape = {0, 3};
   graph::AdjacencyList<std::int32_t> dest(0);
   if (subset_comm != MPI_COMM_NULL)
   {
     io::XDMFFile infile(subset_comm, "mesh.xdmf", "r");
-    cells = infile.read_topology_data("mesh");
-    x = infile.read_geometry_data("mesh");
-    auto [data, offsets] = graph::create_adjacency_data(cells);
+    std::tie(cells, cshape) = infile.read_topology_data("mesh");
+    std::tie(x, xshape) = infile.read_geometry_data("mesh");
 
     int nparts = mpi_size;
     const int tdim = mesh::cell_dim(mesh::CellType::triangle);
-    dest = partitioner(
-        subset_comm, nparts, tdim,
-        graph::AdjacencyList<std::int64_t>(std::move(data), std::move(offsets)),
-        mesh::GhostMode::shared_facet);
+    dest = partitioner(subset_comm, nparts, tdim,
+                       graph::regular_adjacency_list(cells, cshape[1]),
+                       mesh::GhostMode::shared_facet);
   }
-  CHECK(x.shape(1) == 2);
-
-  auto [data, offsets] = graph::create_adjacency_data(cells);
-  graph::AdjacencyList<std::int64_t> cells_topology(std::move(data),
-                                                    std::move(offsets));
+  CHECK(xshape[1] == 2);
 
   // Distribute cells to destination ranks
   const auto [cell_nodes, src, original_cell_index, ghost_owners]
-      = graph::build::distribute(mpi_comm, cells_topology, dest);
+      = graph::build::distribute(
+          mpi_comm, graph::regular_adjacency_list(cells, cshape[1]), dest);
 
   mesh::Topology topology = mesh::create_topology(
       mpi_comm, cell_nodes, original_cell_index, ghost_owners,
@@ -95,7 +90,7 @@ void test_distributed_mesh(mesh::CellPartitionFunction partitioner)
   int tdim = topology.dim();
 
   mesh::Geometry geometry = mesh::create_geometry(mpi_comm, topology, cmap,
-                                                  cell_nodes, x, x.shape(1));
+                                                  cell_nodes, x, xshape[1]);
 
   auto mesh = std::make_shared<mesh::Mesh>(mpi_comm, std::move(topology),
                                            std::move(geometry));
@@ -130,25 +125,31 @@ TEST_CASE("Distributed Mesh", "[distributed_mesh]")
   SECTION("KAHIP with Lambda")
   {
     auto partfn = graph::kahip::partitioner();
-
-    CellPartitionFunction kahip
+    mesh::CellPartitionFunction kahip
         = [&](MPI_Comm comm, int nparts, int tdim,
               const graph::AdjacencyList<std::int64_t>& cells,
               mesh::GhostMode ghost_mode)
     {
       LOG(INFO) << "Compute partition of cells across ranks (KaHIP).";
       // Compute distributed dual graph (for the cells on this process)
-      const auto [dual_graph, num_ghost_edges]
+      const graph::AdjacencyList<std::int64_t> dual_graph
           = mesh::build_dual_graph(comm, cells, tdim);
 
       // Just flag any kind of ghosting for now
       bool ghosting = (ghost_mode != mesh::GhostMode::none);
 
       // Compute partition
-      return partfn(comm, nparts, dual_graph, num_ghost_edges, ghosting);
+      return partfn(comm, nparts, dual_graph, ghosting);
     };
 
     CHECK_NOTHROW(test_distributed_mesh(kahip));
+  }
+#endif
+#ifdef HAS_PARMETIS
+  SECTION("parmetis")
+  {
+    auto partfn = graph::parmetis::partitioner();
+    CHECK_NOTHROW(test_distributed_mesh(mesh::create_cell_partitioner(partfn)));
   }
 #endif
 }

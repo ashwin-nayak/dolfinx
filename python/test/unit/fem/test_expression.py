@@ -11,6 +11,7 @@ import os
 import cffi
 import numba
 import numpy as np
+import numpy.typing
 
 import basix
 import ufl
@@ -41,7 +42,7 @@ index_size = np.dtype(PETSc.IntType).itemsize
 
 if index_size == 8:
     c_int_t = "int64_t"
-    ctypes_index = ctypes.c_int64
+    ctypes_index: np.typing.DTypeLike = ctypes.c_int64
 elif index_size == 4:
     c_int_t = "int32_t"
     ctypes_index = ctypes.c_int32
@@ -106,7 +107,7 @@ def test_rank0():
     f.interpolate(expr1)
 
     ufl_expr = ufl.grad(f)
-    points = vdP1.element.interpolation_points
+    points = vdP1.element.interpolation_points()
 
     compiled_expr = Expression(ufl_expr, points)
     num_cells = mesh.topology.index_map(2).size_local
@@ -146,7 +147,7 @@ def test_rank1_hdiv():
 
     f = ufl.TrialFunction(RT1)
 
-    points = vdP1.element.interpolation_points
+    points = vdP1.element.interpolation_points()
     compiled_expr = Expression(f, points)
 
     num_cells = mesh.topology.index_map(2).size_local
@@ -236,7 +237,7 @@ def test_simple_evaluation():
     ufl_grad_f = Constant(mesh, PETSc.ScalarType(3.0)) * ufl.grad(expr)
     points = np.array([[0.0, 0.0], [1.0, 0.0], [0.0, 1.0]])
     grad_f_expr = Expression(ufl_grad_f, points)
-    assert grad_f_expr.X.shape[0] == points.shape[0]
+    assert grad_f_expr.X().shape[0] == points.shape[0]
     assert grad_f_expr.value_size == 2
 
     # NOTE: Cell numbering is process local.
@@ -246,16 +247,16 @@ def test_simple_evaluation():
 
     grad_f_evaluated = grad_f_expr.eval(cells)
     assert grad_f_evaluated.shape[0] == cells.shape[0]
-    assert grad_f_evaluated.shape[1] == grad_f_expr.value_size * grad_f_expr.X.shape[0]
+    assert grad_f_evaluated.shape[1] == grad_f_expr.value_size * grad_f_expr.X().shape[0]
 
     # Evaluate points in global space
     ufl_x = ufl.SpatialCoordinate(mesh)
     x_expr = Expression(ufl_x, points)
-    assert x_expr.X.shape[0] == points.shape[0]
+    assert x_expr.X().shape[0] == points.shape[0]
     assert x_expr.value_size == 2
     x_evaluated = x_expr.eval(cells)
     assert x_evaluated.shape[0] == cells.shape[0]
-    assert x_evaluated.shape[1] == x_expr.X.shape[0] * x_expr.value_size
+    assert x_evaluated.shape[1] == x_expr.X().shape[0] * x_expr.value_size
 
     # Evaluate exact gradient using global points
     grad_f_exact = exact_grad_f(x_evaluated)
@@ -350,3 +351,35 @@ def test_assembly_into_quadrature_function():
             x = mesh.geometry.cmap.push_forward(quadrature_points, xg)
             e_exact_eval[Q_dofs_unrolled[cell]] = e_exact(x.T).T.flatten()
         assert np.allclose(local.array, e_exact_eval)
+
+
+def test_expression_eval_cells_subset():
+    mesh = dolfinx.mesh.create_unit_square(MPI.COMM_WORLD, 2, 4)
+    V = dolfinx.fem.FunctionSpace(mesh, ("DG", 0))
+
+    cells_imap = mesh.topology.index_map(mesh.topology.dim)
+    all_cells = np.arange(
+        cells_imap.size_local + cells_imap.num_ghosts, dtype=np.int32)
+    cells_to_dofs = np.fromiter(
+        map(V.dofmap.cell_dofs, all_cells), dtype=np.int32)
+    dofs_to_cells = np.argsort(cells_to_dofs)
+
+    u = dolfinx.fem.Function(V)
+    u.x.array[:] = dofs_to_cells
+    u.x.scatter_forward()
+    e = dolfinx.fem.Expression(u, V.element.interpolation_points())
+
+    # Test eval on single cell
+    for c in range(cells_imap.size_local):
+        u_ = e.eval(np.array([c], dtype=np.int32))
+        assert np.allclose(u_, float(c))
+
+    # Test eval on unordered cells
+    cells = np.arange(cells_imap.size_local, dtype=np.int32)[::-1]
+    u_ = e.eval(cells).flatten()
+    assert np.allclose(u_, cells)
+
+    # Test eval on unordered and non sequential cells
+    cells = np.arange(cells_imap.size_local, dtype=np.int32)[::-2]
+    u_ = e.eval(cells)
+    assert np.allclose(u_.ravel(), cells)

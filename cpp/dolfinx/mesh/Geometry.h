@@ -11,8 +11,8 @@
 #include <dolfinx/graph/AdjacencyList.h>
 #include <functional>
 #include <memory>
+#include <span>
 #include <vector>
-#include <xtl/xspan.hpp>
 
 namespace dolfinx::common
 {
@@ -80,14 +80,14 @@ public:
   ///
   /// @return The flattened row-major geometry data, where the shape is
   /// (num_points, 3)
-  xtl::span<const double> x() const;
+  std::span<const double> x() const;
 
   /// @brief Access geometry degrees-of-freedom data (non-const
   /// version).
   ///
   /// @return The flattened row-major geometry data, where the shape is
   /// (num_points, 3)
-  xtl::span<double> x();
+  std::span<double> x();
 
   /// @brief The element that describes the geometry map.
   ///
@@ -110,7 +110,7 @@ private:
   // The coordinate element
   fem::CoordinateElement _cmap;
 
-  // Coordinates for all points stored as a contiguous array (roe-major,
+  // Coordinates for all points stored as a contiguous array (row-major,
   // column size = 3)
   std::vector<double> _x;
 
@@ -120,15 +120,16 @@ private:
 
 /// @brief Build Geometry from input data.
 ///
-/// This function called after the mesh topology is built. It
-/// distributeds the 'node' coordinate data to the required MPI process,
-/// and the created a mesh::Geometry object.
+/// This function should be called after the mesh topology is built. It
+/// distributes the 'node' coordinate data to the required MPI process and then
+/// creates a mesh::Geometry object.
 ///
 /// @param[in] comm The MPI communicator to build the Geometry on
 /// @param[in] topology The mesh topology
 /// @param[in] element The element that defines the geometry map for
 /// each cell
-/// @param[in] cells The mesh cells, including higher-ordder geometry 'nodes'
+/// @param[in] cells The mesh cells, including higher-order geometry
+/// 'nodes'
 /// @param[in] x The node coordinates (row-major, with shape
 /// `(num_nodes, dim)`. The global index of each node is `i +
 /// rank_offset`, where `i` is the local row index in `x` and
@@ -141,7 +142,7 @@ mesh::Geometry
 create_geometry(MPI_Comm comm, const Topology& topology,
                 const fem::CoordinateElement& element,
                 const graph::AdjacencyList<std::int64_t>& cells,
-                const xtl::span<const double>& x, int dim,
+                const std::span<const double>& x, int dim,
                 const std::function<std::vector<int>(
                     const graph::AdjacencyList<std::int32_t>&)>& reorder_fn
                 = nullptr);
